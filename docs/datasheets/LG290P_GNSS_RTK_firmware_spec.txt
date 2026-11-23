@@ -1,0 +1,231 @@
+================================================================================
+ FIRMWARE SPEC SHEET: LG290P GNSS RTK MODULE (Waveshare carrier board)
+ Core receiver: Quectel LG290P, quad-band multi-constellation GNSS with RTK
+ Source: Waveshare product listing
+ Wiki/demos: https://www.waveshare.com/wiki/LG290P_GNSS_RTK_Module
+ Compiled: 2026-11-20
+================================================================================
+
+Legend
+  [SUPPLIER]  stated in the listing
+  [DERIVED]   calculated or inferred from the listing
+  [ADVICE]    engineering recommendation, not from the supplier
+  [UNKNOWN]   not specified or ambiguous; check the Waveshare wiki and the
+              Quectel LG290P hardware design guide and protocol spec
+
+--------------------------------------------------------------------------------
+1. SUMMARY
+--------------------------------------------------------------------------------
+  Function        GNSS receiver giving position, velocity and time (PVT), plus
+                  RTK. Can act as RTK ROVER or RTK BASE.
+  Accuracy        Standalone 0.7 m CEP; RTK 0.8 cm + 1 ppm CEP
+  Host interface  USB-C (onboard UART-USB bridge) or UART (castellated pads /
+                  SH1.0 4-pin header)
+  Protocols       NMEA 0183 (out), RTCM 3.x (in for corrections; out in base
+                  mode), raw observation output
+  Power           5 V, <100 mA
+  Size            33 x 33 mm
+
+  In plain terms: a GPS-type receiver that listens on several frequencies
+  from every major satellite system. On its own it's accurate to under a
+  metre. Feed it correction data from a nearby base station (RTK) and it gets
+  to around a centimetre. You talk to it over a serial port. It sends text
+  sentences (NMEA) and accepts binary correction messages (RTCM).
+
+--------------------------------------------------------------------------------
+2. RF / GNSS CAPABILITY  [SUPPLIER]
+--------------------------------------------------------------------------------
+  Bands           L1 + L2 + L5 + E6 (quad-band)
+  GPS             L1 C/A, L1C*, L2C, L5
+  GLONASS         L1, L2
+  Galileo         E1, E5a, E5b, E6
+  BDS (BeiDou)    B1I, B1C, B2a, B2b, B2I, B3I
+  QZSS            L1 C/A, L1C*, L2C, L5, L6
+  NavIC           L5
+  SBAS            L1 - WAAS, EGNOS, BDSBAS, MSAS, GAGAN, SDCM
+                  (EGNOS is the one that applies in the UK/Europe)
+  Concurrent      5 constellations + QZSS
+  Anti-jamming    On-chip narrow-band interference detection and cancellation
+  (* = as marked in the listing)
+
+  [ADVICE] Antenna: you need a MULTI-BAND (L1/L2/L5/E6) active antenna to get
+  RTK performance. A cheap L1-only patch antenna will badly degrade it.
+  [UNKNOWN] The antenna connector type (likely IPEX/U.FL or SMA), the active
+  antenna bias voltage, and whether the antenna comes in the box.
+
+--------------------------------------------------------------------------------
+3. PERFORMANCE  [SUPPLIER unless marked]
+--------------------------------------------------------------------------------
+  Position accuracy  PVT 0.7 m CEP;  RTK 0.8 cm + 1 ppm CEP
+                     [DERIVED] 1 ppm = +1 mm per km of baseline (distance to
+                     base): ~1.8 cm at 10 km, ~2.8 cm at 20 km.
+  Velocity accuracy  0.03 m/s
+  PPS accuracy       5 ns
+  RTK convergence    <5 s (time from corrections arriving to RTK fix)
+  Nav update rate    PVT default 10 Hz, max 20 Hz
+                     [UNKNOWN] RTK and RAW output rates. The comparison table
+                     in the listing is misaligned. Confirm the maximum RTK
+                     solution rate and raw observation rate in the Quectel
+                     datasheet.
+  TTFF (AGNSS off)   Cold 28 s; Warm 28 s (as listed; looks suspect); Hot 1.7 s
+                     (TTFF = time to first fix)
+  Sensitivity        Re-acquisition -155 dBm; cold start -146 dBm;
+                     tracking ~-160 dBm (table misaligned; verify)
+  Dynamics           Max 4 g, 10,000 m altitude, 490 m/s
+  Operating temp     -40 to +85 C
+
+--------------------------------------------------------------------------------
+4. HARDWARE INTERFACES  [SUPPLIER]
+--------------------------------------------------------------------------------
+  USB-C             UART-to-USB bridge. Also powers the module. Shows up as a
+                    serial port (CDC/VCP) on PC, Raspberry Pi or Jetson.
+  UART              4800-921600 bps, DEFAULT 460800 bps, 8N1 assumed
+                    Reachable via the castellated pads/pin header or the
+                    SH1.0 4-pin connector (Pico/ESP32 examples use this).
+  RTC backup batt   2-pin JST. Keeps ephemeris and time so hot starts work
+                    (1.7 s instead of 28 s). A board version with the battery
+                    is available.
+  LEDs              3 status LEDs (meanings: see wiki) [UNKNOWN]
+  Mounting          Castellated holes, immersion gold; solder down or use a
+                    pin header.
+  Power             5 V supply, <100 mA continuous
+
+  [UNKNOWN] Pin-level details are only shown in images, not in the text:
+   - Full pad pinout (TX, RX, PPS, RESET, WAKEUP/standby, EN, VBAT...)
+   - UART logic level. Probably 3.3 V on the pads. CHECK BEFORE CONNECTING to
+     a 5 V MCU.
+   - SH1.0 4-pin order (probably VCC/GND/TX/RX; verify)
+   - Whether PPS is broken out to a pad
+   - Whether the USB and pad UARTs are the same UART (bridged) or separate
+     ports. If they're shared, don't drive the pad RX while USB is connected.
+   - I2C/SPI: none listed for the LG290P (the other boards in the comparison
+     table have them). Assume UART/USB only.
+
+--------------------------------------------------------------------------------
+5. PROTOCOLS AND DATA FLOW
+--------------------------------------------------------------------------------
+  5.1 Output: NMEA 0183  [SUPPLIER: NMEA 0183]
+   Standard sentences to expect (prefixes GN/GP/GL/GA/GB/GQ): GGA, RMC, GSA,
+   GSV, VTG, GLL, ZDA.  [ADVICE: standard NMEA behaviour]
+   Key field for RTK: GGA field 6, fix quality
+       0 = invalid       1 = GPS (standalone)    2 = DGPS/SBAS
+       4 = RTK FIXED     5 = RTK FLOAT
+   Firmware should expose this as a fix state and gate cm-level use on 4.
+   "Real-time status reporting of differential positioning" [SUPPLIER] comes
+   through GGA (fix quality + age of differential correction, field 13).
+   Each sentence is $....*hh<CR><LF>: an XOR checksum of the bytes between $
+   and *. Always validate it.
+
+  5.2 Input: RTCM 3.x corrections  [SUPPLIER: RTCM 3.x]
+   Rover mode: write the RTCM3 byte stream from the base or caster straight
+   into the module's UART RX. No parsing is needed to forward it.
+   Frame format [ADVICE: RTCM standard]:
+       0xD3 | 6 reserved bits + 10-bit length | payload (0-1023 B) | CRC-24Q
+   If the corrections arrive over a lossy link (LoRa/radio), reframe and
+   CRC-check before forwarding, and drop corrupt frames.
+   Typical correction message types: MSM4/MSM7 observations (1074/1077 GPS,
+   1084/1087 GLO, 1094/1097 GAL, 1124/1127 BDS), base position 1005/1006,
+   GLONASS biases 1230.
+
+  5.3 Base mode  [SUPPLIER: RTK Base supported]
+   In base mode the module outputs RTCM3 that you send to rovers. Its fixed
+   position comes from either entering surveyed coordinates or a survey-in
+   (averaging).
+   Configuration uses Quectel proprietary commands ($PQTM... family, e.g.
+   receiver mode, survey-in, message enable, baud rate, save to flash).
+   [UNKNOWN] Use the exact command syntax from the Quectel LG290P protocol
+   specification and the Waveshare wiki. Don't rely on the examples here.
+   Remember to save the config to non-volatile memory, or it resets at
+   power-up.
+
+  5.4 Raw observations  [SUPPLIER: "Raw Observation data output"]
+   Useful for PPK (post-processing) with e.g. RTKLIB. Likely output as RTCM3
+   MSM messages. [UNKNOWN] Format and maximum rate.
+
+  5.5 Correction sources  [SUPPLIER + ADVICE]
+   a) Your own base: a second LG290P in base mode at a known point. Link it
+      to the rover by radio (LoRa, SiK telemetry, Wi-Fi). Keep the baseline
+      short (ideally <10-20 km).
+   b) A network RTK / NTRIP service ("paid RTK base station enhanced
+      services"): the host runs an NTRIP client over the internet. Many
+      casters need the rover's GGA sent back (VRS), so the firmware must
+      upload GGA every ~1-10 s.
+
+  Typical rover data path:
+   [NTRIP caster / radio] --RTCM3--> [host MCU/SBC] --UART TX--> [LG290P RX]
+   [LG290P TX] --NMEA (+ optional raw)--> [host] --> nav stack / logging
+                                         \--GGA--> back to caster (VRS)
+
+--------------------------------------------------------------------------------
+6. FIRMWARE IMPLEMENTATION NOTES  [ADVICE]
+--------------------------------------------------------------------------------
+  6.1 UART throughput
+   460800 baud with 8N1 is ~46 kB/s. At 10-20 Hz with GGA+RMC+GSA+GSV, plus
+   raw data, the link carries several kB/s, in bursts.
+   - Use DMA + a ring buffer (idle-line interrupt on STM32, the UART event
+     queue on ESP32). Don't receive byte by byte in an ISR without a buffer.
+   - Size the RX buffer for at least 2 epochs (e.g. 4-8 kB if raw output is
+     on).
+   - Disable sentences you don't need (GSV is big) to save bandwidth and
+     parse time.
+   - Some MCUs can't run 460800 reliably from their clock. Drop the module
+     baud rate with a config command and save it.
+   - Corrections in: RTCM is typically 0.5-2 kB/s for a full multi-band
+     MSM set.
+
+  6.2 Parser
+   - Make it a byte-wise state machine that handles NMEA ($...*hh) and binary
+     (0xD3 RTCM) interleaved on the same stream, if raw/RTCM output is on.
+   - Validate checksums/CRCs and count errors for diagnostics.
+   - Group sentences by epoch (shared UTC time) before publishing a solution.
+
+  6.3 Timing
+   - If PPS is available, timestamp it with a capture timer and pair it with
+     the UTC from ZDA/RMC for sub-microsecond time sync (sensor fusion,
+     ROS time).
+   - Without PPS, NMEA arrival times jitter by milliseconds. Fine for
+     logging, poor for fusion.
+
+  6.4 State machine / health
+   NO_FIX -> 3D (1) -> SBAS (2) -> RTK_FLOAT (5) -> RTK_FIXED (4)
+   - Track correction age (GGA field 13). If it goes stale (>5-10 s), drop to
+     float/standalone and flag it.
+   - Report satellites used, HDOP, fix state and correction age as telemetry.
+   - Watchdog: no valid NMEA for more than 2 s means reset the UART or power
+     cycle the module.
+
+  6.5 Startup
+   - With the RTC battery fitted, hot start is ~1.7 s; without it, a cold
+     start is ~28 s. Plan boot sequencing and "position valid" gating around
+     that.
+   - Send config commands only after the module boot banner or first valid
+     NMEA, wait for the ACK, then save.
+
+  6.6 Power
+   5 V, <100 mA; plus the active antenna's current (typically 10-30 mA).
+   Decouple close to the module. Keep switching regulators and motor drivers
+   away from it, as they hurt the RF noise floor.
+
+--------------------------------------------------------------------------------
+7. MECHANICAL
+--------------------------------------------------------------------------------
+  Board  33 x 33 mm, castellated edges. See the wiki for the outline drawing
+  and pad positions.
+
+--------------------------------------------------------------------------------
+8. OPEN QUESTIONS / CONFIRM FROM WIKI OR DATASHEET
+--------------------------------------------------------------------------------
+  [ ] Full pad pinout incl. PPS, RESET, WAKEUP; UART logic level
+  [ ] SH1.0 4-pin order
+  [ ] Whether USB-C and the pad UART are shared or separate
+  [ ] Antenna connector type, bias voltage, and whether an antenna is
+      included
+  [ ] Maximum RTK solution rate and raw observation rate (listing table is
+      ambiguous)
+  [ ] Exact $PQTM command set: rover/base mode, survey-in, fixed base
+      coordinates, message enables, rates, baud, save
+  [ ] Raw output format (RTCM3 MSM vs proprietary)
+  [ ] Meaning of the 3 LEDs
+  [ ] Warm-start TTFF (listed as 28 s, the same as cold; probably a typo)
+  [ ] Firmware update procedure for the LG290P (Quectel QGNSS tool?)
+================================================================================

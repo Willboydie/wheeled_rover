@@ -1,0 +1,124 @@
+================================================================================
+ FIRMWARE ARCHITECTURE: WHEELED ROVER
+ Read this with docs/plan/rover_firmware_architecture.html.
+ Section titles below match that page.
+ Compiled: 2026-11-23
+================================================================================
+
+  Three jobs. The ESP32 is the only device on the internet. The realtime
+  MCU, a Teensy 4.1 on this build, owns the sensors and the motors. The
+  external computer, the CCU, fuses those readings with the robot's
+  cameras into a 5DOF pose. Its navigation engine turns that pose into
+  wheel speeds. The RTK fix is computed on the LG290P, and only there.
+
+--------------------------------------------------------------------------------
+1. WHO DOES WHAT
+--------------------------------------------------------------------------------
+  Network gateway     ESP32, with a cellular modem on this build.
+                      Fetches RTK corrections and passes them on.
+                      Hosts the status page. The pose on that page is
+                      the CCU's estimate.
+                      User commands, such as settings adjustments, enter
+                      here and are passed on to the other rover devices.
+                      Later, firmware updates for every device arrive
+                      here first.
+
+  Realtime MCU        Teensy 4.1 on this build. The chip may change.
+                      The job does not.
+                      Passes corrections through to the LG290P and reads
+                      the finished fix back.
+                      Sends all of its sensor readings to the CCU.
+                      Forwards the CCU pose and its uncertainty to the
+                      status page.
+                      Drives the two wheels at the speeds the navigation
+                      engine commands.
+                      Applies the user commands that belong to it.
+
+  CCU                 The external computer. Not this firmware. The
+                      program itself is out of scope. This is the overview.
+                      Takes every Teensy sensor reading, and the cameras
+                      on the robot.
+                      Outputs a 5DOF pose, with no height, and an
+                      uncertainty taken directly from the fusion.
+                      Leaving height out may be reversed.
+                      Passes that pose to the autonomous navigation
+                      engine, which produces wheel-velocity commands
+                      from its path plan.
+
+--------------------------------------------------------------------------------
+2. WHERE THE RTK FIX IS COMPUTED
+--------------------------------------------------------------------------------
+  On the LG290P. The ESP32 fetches corrections from the base-station
+  service. The realtime MCU passes those corrections through and reads
+  the finished fix back. Neither MCU computes the position. The CCU's
+  pose is a later fusion of this fix with the other readings. It is
+  not a second RTK calculation.
+
+  When the base-station service needs the rover position, that position
+  is the fix the LG290P already computed.
+
+--------------------------------------------------------------------------------
+3. HOW THE ROVER IS CONNECTED
+--------------------------------------------------------------------------------
+  Internet, then the ESP32, then the realtime MCU. The CCU joins at the
+  realtime MCU, on a separate link from the ESP32. The robot's cameras
+  go to the CCU, not through the Teensy.
+
+  The realtime MCU owns the LG290P, the BNO055, the two wheel encoders,
+  and the motor driver. It sends those readings to the CCU. It does not
+  fuse them. The CCU does.
+
+--------------------------------------------------------------------------------
+4. WHAT MOVES ON EACH LINK
+--------------------------------------------------------------------------------
+  The two links stay separate, so a later change of MCU does not move
+  these jobs.
+
+  Gateway link, ESP32 and the realtime MCU.
+    Corrections and user commands go down.
+    The status-page fields come up: the CCU pose and its uncertainty,
+    forwarded on, plus GNSS health.
+    User commands are passed on from the ESP32 to the other rover
+    devices. On this link, that device is the realtime MCU.
+
+  Driving link, CCU and the realtime MCU.
+    Every sensor reading goes up.
+    The CCU's 5DOF pose, the uncertainty from the fusion, and the
+    navigation engine's wheel-velocity commands come down.
+    This link does not pass through the ESP32.
+
+--------------------------------------------------------------------------------
+5. WHAT THE STATUS PAGE SHOWS
+--------------------------------------------------------------------------------
+  The ESP32 hosts the page. It does not compute a pose. East, north,
+  heading, roll, and pitch are the CCU's best estimate. There is no
+  height. Leaving height out is a design choice and may be reversed.
+  The uncertainty is the value the fusion itself produces.
+
+  Satellites visible, RTK fix status, and the signal-strength score
+  stay as GNSS health from the LG290P. They are not the pose. The
+  signal-strength score's metric is not chosen yet.
+
+--------------------------------------------------------------------------------
+6. THIS BUILD, AND THE LATER PRODUCT
+--------------------------------------------------------------------------------
+  Now.
+    The ESP32 can update its own application over the internet.
+    The Teensy is updated on the bench.
+    The LG290P is updated by hand.
+
+  Later.
+    Every device is updated through the ESP32's internet connection,
+    including the realtime MCU and the LG290P.
+    The Teensy may be replaced to make that practical. The replacement
+    is an open choice.
+    The two links stay as they are.
+
+--------------------------------------------------------------------------------
+NOT COVERED HERE
+--------------------------------------------------------------------------------
+  The CCU program and the navigation engine, beyond the overview above.
+  The status-page layout, and how a browser opens it.
+  The signal-strength metric.
+  Which chip replaces the Teensy, if one is required.
+================================================================================

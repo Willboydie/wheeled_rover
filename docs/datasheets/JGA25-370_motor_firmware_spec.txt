@@ -1,0 +1,278 @@
+================================================================================
+ FIRMWARE SPEC SHEET: JGA25-370 BRUSHED DC GEAR MOTOR WITH HALL ENCODER
+ Manufacturer: Jiali Motor        Model: JGA25-370 (encoder version)
+ Source: vendor product listing (supplier data, not independent tests)
+ Compiled: 2026-11-20
+================================================================================
+
+Legend
+  [SUPPLIER]  stated in the listing
+  [DERIVED]   calculated from supplier figures
+  [ADVICE]    engineering recommendation, not from the supplier
+  [UNKNOWN]   not specified; confirm on the bench or with the vendor
+
+--------------------------------------------------------------------------------
+1. SUMMARY
+--------------------------------------------------------------------------------
+  Motor type        Brushed permanent-magnet DC, carbon brushes, copper winding
+  Gearbox           25mm metal multi-stage spur gearbox, 4.4:1 to 500:1
+  Feedback          Magnetic incremental Hall encoder on the MOTOR shaft,
+                    2 channels (A/B quadrature), 11 pulses/motor rev/channel
+  Supply variants   12V DC or 24V DC (the 6V table in the listing is reference only)
+  Motor speed       6000 RPM before gearbox (no load, at rated voltage)
+  Control           PWM through an external brushed-DC H-bridge driver
+  Position sensing  INCREMENTAL ONLY: no absolute position, no index pulse.
+                    Homing is needed if absolute position matters.
+
+  In plain terms: a small geared DC motor with a sensor on the back that ticks
+  11 times per motor revolution. Count the ticks to get speed and relative
+  position. The gearbox sets how many ticks you get per output revolution.
+
+--------------------------------------------------------------------------------
+2. WIRING / PINOUT  (PH2.0 connector + supplied lead)
+--------------------------------------------------------------------------------
+  Wire     Function                     Notes
+  -------  ---------------------------  ----------------------------------------
+  Red      Motor +   (M+)               To H-bridge output A
+  White    Motor -   (M-)               To H-bridge output B
+  Black    Encoder GND                  Common with MCU GND
+  Blue     Encoder VCC, 3.3V-5V DC      NEVER connect to the 12/24V motor rail
+  Green    Encoder channel (A or B)     [UNKNOWN] which colour is A
+  Yellow   Encoder channel (B or A)     [UNKNOWN] which colour is B
+
+  [SUPPLIER] Reverse the motor only by swapping red and white (or using the
+             driver's direction control). Never swap the encoder supply polarity.
+  [SUPPLIER] Built-in pull-up/conditioning resistors on the signal lines.
+  [UNKNOWN]  PH2.0 pin order on the connector (only wire colours are given).
+             Check against the actual lead before making a harness.
+  [UNKNOWN]  Output stage type. "Built-in pull-ups" suggests open-collector
+             outputs pulled up to the encoder VCC.
+
+  !! LOGIC-LEVEL GOTCHA [ADVICE]
+     Because the pull-ups go to the encoder VCC, powering the encoder from 5V
+     probably gives 5V signals. On a 3.3V MCU (ESP32, RP2040, most STM32 pins
+     that aren't 5V-tolerant), power the encoder from 3.3V, or level-shift.
+     Measure the signal high level with a scope before connecting.
+
+--------------------------------------------------------------------------------
+3. ELECTRICAL RATINGS  [SUPPLIER]
+--------------------------------------------------------------------------------
+                          12V variant        24V variant
+  No-load current         0.05 A             0.04 A
+  Rated (max-eff) current 0.35 A             0.15 A
+  Rated power             4.2 W              3.6 W
+  STALL current           1.5 A              0.6 A
+  Stall power             18 W               14.4 W
+  Operating temp          -10 to +70 C (supplier claim; "24-hour use")
+  Noise                   ~55 dB (conditions unspecified)
+
+  Driver sizing [ADVICE]
+   - Pick an H-bridge rated for at least the stall current continuously, with
+     margin: >=2A for 12V, >=1A for 24V. Inrush at start-up is close to stall
+     current.
+   - Examples that fit: DRV8871, DRV8833 (12V only, 10.8V max, so marginal),
+     TB6612FNG (12V only, 15V max), L298N (works but inefficient), BTS7960
+     (overkill). For 24V use one rated for >=30V, e.g. DRV8871 (45V max) or
+     DRV8876.
+   - Put a 100nF ceramic across the motor terminals (and optionally 2 x 47nF
+     to the case) to cut brush noise.
+
+  Supplier operating rules
+   - Choose the motor by rated-load torque, not stall torque.
+   - Don't stall the motor or run it close to stall. It can damage the motor
+     or strip the gears.
+   - Stop before reversing direction.
+   - Lowering speed electrically does not increase torque the way a higher
+     gear ratio does.
+
+--------------------------------------------------------------------------------
+4. ENCODER: SIGNAL SPEC AND MATHS
+--------------------------------------------------------------------------------
+  [SUPPLIER]
+   Type                 Magnetic incremental, AB quadrature square wave
+   Magnet               22 poles (11 pole pairs)
+   Pulses               11 pulses per MOTOR rev, per channel
+   Per output rev       11 x gear_ratio pulses, per channel
+   Response frequency   100 kHz (supplier figure)
+   Speed formula        RPM_out = f_Hz x 60 / (11 x gear_ratio)
+                        (f_Hz = full pulses per second on ONE channel)
+
+  [DERIVED] Counting modes
+   x1 (rising edges, one channel)   11  counts / motor rev
+   x2 (both edges, one channel)     22  counts / motor rev
+   x4 (all edges, both channels)    44  counts / motor rev   <- use this
+
+   General: RPM_out = counts_per_s x 60 / (CPR_motor x gear_ratio)
+            where CPR_motor = 11, 22 or 44 depending on mode.
+
+  [DERIVED] Maximum signal rates (encoder is on the motor shaft, so these are
+            the same for every gear ratio)
+   Motor at 6000 RPM (no load)  = 100 rev/s
+     Per-channel frequency      = 1100 Hz
+     x4 edge rate               = 4400 edges/s  (~227 us between edges)
+   Motor at ~4800 RPM (rated load point, e.g. 1100/4.4 or 9.6x500)
+     Per-channel frequency      ~ 880 Hz
+   Even at 2x overspeed (~2.2 kHz) this is far below the 100 kHz limit, so
+   ordinary GPIO interrupts can keep up. A hardware counter is still better.
+
+  [DERIVED] Counts per OUTPUT-shaft revolution, by gear ratio
+   Ratio   No-load   x1 (per ch)   x4 (quadrature)   Deg per x4 count
+   ------  --------  ------------  ----------------  ----------------
+   4.4     1364 RPM      48.4           193.6            1.860
+   9.6      625 RPM     105.6           422.4            0.852
+   21.3     282 RPM     234.3           937.2            0.384
+   35.5     169 RPM     390.5          1562.0            0.230
+   46.8     128 RPM     514.8          2059.2            0.175
+   78        77 RPM     858.0          3432.0            0.105
+   103       58 RPM    1133.0          4532.0            0.0794
+   171       35 RPM    1881.0          7524.0            0.0478
+   226       27 RPM    2486.0          9944.0            0.0362
+   377       16 RPM    4147.0         16588.0            0.0217
+   500       12 RPM    5500.0         22000.0            0.0164
+
+   !! The ratios listed are nominal and rounded (some give non-integer counts
+      per output rev). Store the counts-per-rev figure as a float, or better,
+      calibrate it: mark the shaft, turn it N full revolutions, and divide the
+      counts by N.
+   !! Gear backlash sits between the encoder and the output shaft, so the
+      encoder can't see it. Output position is accurate only to within the
+      backlash (not specified; typically around 1-3 degrees on gearboxes of
+      this class).
+
+  Direction [UNKNOWN]
+   Which colour is A, and which direction counts up, are undefined. Find out
+   on the bench and swap A/B in software, e.g. with a config flag
+   ENC_INVERT_DIR.
+
+--------------------------------------------------------------------------------
+5. FIRMWARE IMPLEMENTATION NOTES  [ADVICE]
+--------------------------------------------------------------------------------
+  5.1 Counting hardware (use a peripheral, not ISRs, where you can)
+   STM32     TIMx in encoder mode (TI12, x4). Enable the input filter (ICxF).
+   ESP32     PCNT unit with glitch filter (~1 us), or the ESP-IDF
+             pulse_cnt driver.
+   RP2040    PIO quadrature encoder program (pico-examples).
+   AVR       Pin-change interrupts; fine at these rates, but costs CPU.
+   Use a 32-bit (or extended 16-bit) accumulator. With the 500:1 gearbox,
+   x4 is 22000 counts per output rev, so a 16-bit counter wraps in under
+   3 revs.
+
+  5.2 Speed estimation
+   The encoder is low-resolution (44 counts per motor rev), so:
+   - Count-in-window (M-method): at 4400 edges/s, a 1 ms window gives only
+     about 4 counts (~25% quantisation). Use a window of 10 ms or more (~44
+     counts, ~2%), or a moving average.
+   - Edge-period timing (T-method): time the gap between edges with a capture
+     timer. Better at low speed. Add a timeout so that "no edge for X ms"
+     reads as 0 RPM.
+   - Practical choice: M/T hybrid, or M-method with a 10-20 ms velocity loop
+     and a low-pass filter.
+   In plain terms: at a fast control-loop rate you don't see enough ticks to
+   measure speed precisely, so either measure over a longer window or time
+   the gap between ticks.
+
+  5.3 PWM
+   [UNKNOWN] The supplier gives no PWM frequency limits.
+   Typical: 15-25 kHz (above hearing; fine for small brushed motors). Lower
+   frequencies (1-5 kHz) give more low-speed torque but whine.
+   Keep within the driver's limits and dead-time requirements.
+   Expect a deadband: the motor won't turn below roughly 5-15% duty. Find it
+   on the bench and compensate in the controller.
+
+  5.4 Direction changes
+   The supplier says to stop before reversing. Implement a ramp to zero,
+   optionally a short brake (both low-side on, or the driver's brake mode),
+   then reverse. Don't snap from +100% to -100%.
+
+  5.5 Protection
+   - Stall detection: PWM above a threshold while encoder speed stays near 0
+     for more than ~200-500 ms means cut power, set a fault, and back off.
+   - If the driver has current sensing, set the trip point well below stall
+     (e.g. ~1.0 A sustained on the 12V version, ~0.4 A on 24V).
+   - Encoder-loss detection: commanded motion with no counts means a fault.
+     Watch for a wiring fault before PID integral wind-up drives the output
+     to full.
+   - Soft-start / slew limit on the PWM to limit inrush.
+
+  5.6 Noise
+   Brush commutation is electrically noisy. Twist the encoder wires, keep them
+   away from the motor leads, use the MCU's digital input filter, and add a
+   small RC (e.g. 100-470 ohm + 1 nF) at the MCU input if you see glitches.
+
+  5.7 Control loop
+   Cascade: position (P/PD) -> velocity (PI) -> PWM. Feed-forward on velocity
+   helps a lot with the deadband. Anti-windup on the integral term.
+
+--------------------------------------------------------------------------------
+6. PERFORMANCE TABLES  [SUPPLIER]
+--------------------------------------------------------------------------------
+  Torque in kgf.cm (1 kgf.cm = 0.0981 N.m). "Rated" = maximum-efficiency
+  point. Stall values are limits, not operating points. Loaded speed is at the
+  rated point.
+
+  12V (no-load 0.05A, rated 0.35A / 4.2W, stall 1.5A / 18W)
+   Ratio  NoLoad  Loaded  Rated T   Rated T   Stall T   Weight
+          RPM     RPM     kgf.cm    N.m       kgf.cm    g
+   4.4    1364    1100    0.12      0.012     0.6       93
+   9.6     625     500    0.3       0.029     1.2       93
+   21.3    282     225    0.5       0.049     2.5       95
+   35.5    169     135    1.0       0.098     5         95
+   46.8    128     100    1.2       0.118     6         96
+   78       77      60    1.6       0.157     9         96
+   103      58      48    2.2       0.216     10        98
+   171      35      28    2.8       0.275     13        98
+   226      27      22    5.0       0.490     15        98
+   377      16      13    7.0       0.686     15        100
+   500      12     9.6    9.0       0.883     15        100
+
+  24V (no-load 0.04A, rated 0.15A / 3.6W, stall 0.6A / 14.4W)
+   Ratio  NoLoad  Loaded  Rated T   Rated T   Stall T   Weight
+          RPM     RPM     kgf.cm    N.m       kgf.cm    g
+   4.4    1364    1100    0.15      0.015     0.7       93
+   9.6     625     500    0.3       0.029     1.5       93
+   21.3    282     225    0.6       0.059     3         95
+   35.5    169     135    1.2       0.118     5.5       95
+   46.8    128     100    1.3       0.127     6.5       96
+   78       77      60    1.6       0.157     9         96
+   103      58      48    2.5       0.245     11        98
+   171      35      28    3.2       0.314     15        98
+   226      27      22    6.5       0.637     15        98
+   377      16      13    8.0       0.785     15        100
+   500      12     9.6    9.0       0.883     15        100
+
+  Note: stall torque tops out at 15 kgf.cm from 171:1 or 226:1 upward. That is
+  the gearbox's mechanical limit, not the motor's, so high-ratio gearboxes are
+  easy to strip if the motor stalls.
+
+--------------------------------------------------------------------------------
+7. MECHANICAL (for reference)  [SUPPLIER]
+--------------------------------------------------------------------------------
+  Motor body        24 +/-0.5 mm dia x 31 mm long
+  Gearbox           25 mm dia; length L = 17 mm (4.4/9.6), 19 (21.3),
+                    21 (35.5/46.8), 23 (78/103), 25 (171/226), 27 (377/500)
+  Output shaft      4 mm D-shaft (-0.03/-0.08), 3.5 mm across the flat,
+                    8 mm flat length, 12.1 mm projection incl. 2.5 mm boss
+  Locating boss     7 mm dia x 2.5 mm
+  Front mounting    2 x M3, 4.5 mm deep, 17 mm centres
+  Rear encoder      8.7 mm extension; connector envelope 9.5 x 14.2 mm
+  Weight            93-100 g depending on ratio
+  Optional bracket  3 mm L-bracket, 26.2 mm wide, 33.5 x 33.5 mm; motor face
+                    2 x 3.5 mm holes @ 17 mm; base 4 x 3.5 mm @ 14 x 16 mm
+
+--------------------------------------------------------------------------------
+8. OPEN QUESTIONS / VERIFY ON THE BENCH
+--------------------------------------------------------------------------------
+  [ ] Green/yellow A/B assignment and which direction counts up
+  [ ] PH2.0 connector pin order
+  [ ] Encoder output type (open-collector?) and pull-up value; signal high
+      level at 3.3V vs 5V VCC
+  [ ] Encoder supply current (not given)
+  [ ] Exact gear ratio of the unit received (calibrate counts per output rev)
+  [ ] Gearbox backlash
+  [ ] PWM deadband (minimum duty that starts the motor) at your supply voltage
+  [ ] Motor electrical constants (R, L, Kt, Ke) are not given. Measure them if
+      you need model-based control: R with a multimeter on a locked rotor,
+      Ke from no-load speed vs voltage.
+  [ ] If you're using the bundled speed controller or PSU: their ratings,
+      connectors and plugs are not specified in the listing.
+================================================================================

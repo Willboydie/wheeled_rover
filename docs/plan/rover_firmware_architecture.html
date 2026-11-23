@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wheeled rover firmware architecture</title>
+<style>
+  :root {
+    --ink: #1c2430;
+    --muted: #526072;
+    --line: #d5dde6;
+    --paper: #f3f6f8;
+    --card: #ffffff;
+    --net: #1d4ed8;
+    --net-soft: #e8f0ff;
+    --gw: #0f766e;
+    --gw-soft: #e6f6f3;
+    --mcu: #c2410c;
+    --mcu-soft: #fff1e8;
+    --sbc: #6d28d9;
+    --sbc-soft: #f3e8ff;
+    --rtk: #15803d;
+    --rtk-soft: #e9f8ee;
+    --sensor: #334155;
+    --motor: #be123c;
+    --motor-soft: #ffe8ee;
+    --later: #64748b;
+    --assumed: #b45309;
+  }
+
+  * { box-sizing: border-box; }
+  html { color-scheme: light; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 16px/1.45 "Segoe UI", system-ui, sans-serif;
+  }
+  main, header {
+    width: min(1080px, calc(100% - 32px));
+    margin-inline: auto;
+  }
+  header { padding: 36px 0 8px; }
+  .kicker {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  h1 {
+    margin: 0 0 10px;
+    font-size: 34px;
+    line-height: 1.15;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+  .lede {
+    margin: 0;
+    max-width: 62ch;
+    font-size: 18px;
+  }
+  .toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 16px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .toc a {
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 13px;
+    text-decoration: none;
+  }
+  .toc a:hover { border-color: var(--gw); color: var(--gw); }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 18px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .legend li, .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 13px;
+    background: var(--card);
+    border: 1px solid var(--line);
+  }
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  section {
+    margin: 28px 0;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px;
+  }
+  h2 {
+    margin: 0 0 6px;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+  }
+  .sec-num {
+    display: inline-block;
+    min-width: 1.6em;
+    color: var(--muted);
+    font-weight: 650;
+  }
+  .intro {
+    margin: 0 0 16px;
+    color: var(--muted);
+    max-width: 75ch;
+  }
+  .roles {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .role {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px 14px 12px;
+    background: var(--card);
+    border-top: 6px solid var(--sensor);
+  }
+  .role h3 { margin: 0 0 4px; font-size: 18px; }
+  .role p { margin: 0 0 8px; color: var(--muted); font-size: 14px; }
+  .role ul { margin: 0; padding-left: 18px; }
+  .role li { margin: 4px 0; }
+  .role.net { border-top-color: var(--net); }
+  .role.gw { border-top-color: var(--gw); }
+  .role.mcu { border-top-color: var(--mcu); }
+  .role.sbc { border-top-color: var(--sbc); }
+  .role.rtk { border-top-color: var(--rtk); background: var(--rtk-soft); }
+
+  .rtk-svg { display: block; width: 100%; height: auto; }
+  .node {
+    border-radius: 14px;
+    padding: 14px;
+    color: white;
+  }
+  .node .who { margin: 0; font-size: 13px; opacity: 0.9; }
+  .node h3 { margin: 4px 0 8px; font-size: 20px; line-height: 1.2; }
+  .node p { margin: 0; font-size: 14px; }
+  .node.net { background: var(--net); }
+  .node.gw { background: var(--gw); }
+  .node.mcu { background: var(--mcu); }
+  .node.sbc { background: var(--sbc); }
+  .node.rtk {
+    background: var(--rtk);
+    outline: 4px solid #facc15;
+    outline-offset: 0;
+  }
+  .node .tag {
+    display: inline-block;
+    margin-top: 10px;
+    background: rgba(255,255,255,0.18);
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 12px;
+  }
+  .hop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.3;
+  }
+  .shaft {
+    position: relative;
+    background: currentColor;
+  }
+  .hop.down { color: var(--gw); }
+  .hop.down .shaft { width: 3px; height: 36px; }
+  .hop.down .shaft::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -7px;
+    transform: translateX(-50%);
+    border: 7px solid transparent;
+    border-top-color: currentColor;
+  }
+  .hop.across .shaft { width: 100%; height: 3px; }
+  .hop.across .shaft::before,
+  .hop.across .shaft::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 6px solid transparent;
+  }
+  .hop.across .shaft::before {
+    left: -4px;
+    border-right-color: currentColor;
+  }
+  .hop.across .shaft::after {
+    right: -4px;
+    border-left-color: currentColor;
+  }
+  .hop.drive { color: var(--sbc); }
+  .hop.cell { color: var(--net); }
+  .hop.calc { color: var(--rtk); }
+
+  .stack { width: min(100%, 440px); }
+  .split {
+    display: grid;
+    grid-template-columns: minmax(280px, 440px) 168px minmax(240px, 320px);
+    gap: 8px;
+    align-items: center;
+  }
+  .owns {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .own {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px;
+    background: #fff;
+    border-top: 6px solid var(--sensor);
+  }
+  .own h3 { margin: 0 0 6px; font-size: 16px; }
+  .own p { margin: 0; color: var(--muted); font-size: 14px; }
+  .own.rtk {
+    background: var(--rtk-soft);
+    border-color: var(--rtk);
+    border-top-color: var(--rtk);
+  }
+  .own.rtk h3, .own.rtk p { color: #14532d; }
+  .own.rtk p { color: #166534; }
+  .own.motor { border-top-color: var(--motor); }
+  .own.sensor { border-top-color: var(--sensor); }
+  .banner {
+    margin: 14px 0 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--sbc-soft);
+    color: #4c1d95;
+    font-weight: 650;
+  }
+
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .track {
+    border-radius: 14px;
+    padding: 14px;
+    border: 1px solid var(--line);
+  }
+  .track h3 { margin: 0 0 8px; }
+  .track ol { margin: 0; padding-left: 18px; }
+  .track li { margin: 6px 0; }
+  .track.gw { background: var(--gw-soft); }
+  .track.sbc { background: var(--sbc-soft); }
+  .ends {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .chip {
+    border-radius: 10px;
+    padding: 8px 10px;
+    color: white;
+    font-size: 14px;
+    font-weight: 650;
+  }
+
+  .versions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .ver { border-radius: 14px; padding: 14px; border: 1px solid var(--line); }
+  .ver.now { background: var(--gw-soft); }
+  .ver.later { background: #f1f5f9; }
+  .ver h3 { margin: 0 0 8px; }
+  .ver ul { margin: 0; padding-left: 18px; }
+  .ver li { margin: 6px 0; }
+
+  .sheet {
+    margin-top: 14px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .sheet header, .sheet-head {
+    background: var(--gw);
+    color: white;
+    padding: 12px 14px;
+  }
+  .sheet-head h3 { margin: 0; font-size: 18px; }
+  .sheet-head p { margin: 4px 0 0; font-size: 14px; color: #ccfbf1; }
+  .sheet-body { padding: 12px; background: var(--gw-soft); }
+  .src {
+    margin: 8px 0 6px;
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--muted);
+  }
+  .src:first-child { margin-top: 0; }
+  .fields {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  .fields.pose { grid-template-columns: repeat(5, 1fr); }
+  .field {
+    background: white;
+    border-radius: 10px;
+    padding: 10px 12px;
+    border-top: 4px solid var(--rtk);
+  }
+  .field.att { border-top-color: var(--sensor); }
+  .field span {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .field strong { display: block; margin-top: 2px; font-size: 16px; }
+  .out { margin: 0; padding-left: 18px; color: var(--muted); }
+  .out li { margin: 4px 0; }
+  figcaption {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  footer {
+    width: min(1080px, calc(100% - 32px));
+    margin: 0 auto 40px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .more {
+    margin-top: 14px;
+    border-top: 1px solid var(--line);
+    padding-top: 8px;
+  }
+  .more summary {
+    cursor: pointer;
+    color: var(--gw);
+    font-weight: 650;
+    font-size: 14px;
+  }
+  .more .prose {
+    margin-top: 10px;
+    max-width: 68ch;
+  }
+  .more .prose p { margin: 0 0 8px; }
+  .more .prose h3 {
+    margin: 12px 0 4px;
+    font-size: 15px;
+  }
+
+  @media (max-width: 980px) {
+    .roles, .owns, .pair, .versions, .fields, .fields.pose { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 720px) {
+    .split { grid-template-columns: 1fr; }
+    .roles, .owns, .pair, .versions, .fields, .fields.pose { grid-template-columns: 1fr; }
+    h1 { font-size: 28px; }
+    .hop.across .shaft { width: 3px; height: 28px; }
+    .hop.across .shaft::before { display: none; }
+    .hop.across .shaft::after {
+      left: 50%;
+      right: auto;
+      top: auto;
+      bottom: -7px;
+      transform: translateX(-50%);
+      border: 7px solid transparent;
+      border-top-color: currentColor;
+    }
+  }
+</style>
+</head>
+<body>
+<header>
+  <p class="kicker">Firmware architecture · 23 Nov 2026</p>
+  <h1>Wheeled rover</h1>
+  <p class="lede">The LG290P computes the RTK fix. The CCU fuses that fix with the other sensors and the cameras into the pose the rover drives on.</p>
+  <ul class="toc" aria-label="On this page">
+    <li><a href="#roles">Who</a></li>
+    <li><a href="#rtk">RTK fix</a></li>
+    <li><a href="#system">Connections</a></li>
+    <li><a href="#links">Two links</a></li>
+    <li><a href="#status">Status page</a></li>
+    <li><a href="#versions">Now and later</a></li>
+  </ul>
+  <ul class="legend" aria-label="Colours">
+    <li><span class="swatch" style="background:#1d4ed8"></span> Internet</li>
+    <li><span class="swatch" style="background:#0f766e"></span> ESP32</li>
+    <li><span class="swatch" style="background:#c2410c"></span> Teensy</li>
+    <li><span class="swatch" style="background:#6d28d9"></span> CCU</li>
+    <li><span class="swatch" style="background:#15803d"></span> RTK fix</li>
+    <li><span class="swatch" style="background:#be123c"></span> Motors</li>
+  </ul>
+</header>
+
+<main>
+  <section id="roles" aria-labelledby="roles-title">
+    <h2 id="roles-title"><span class="sec-num">1</span> Who does what</h2>
+    <p class="intro">Three devices. Only the ESP32 is on the internet. Only the Teensy drives the wheels. Only the CCU decides the pose.</p>
+    <div class="roles">
+      <article class="role gw">
+        <h3>ESP32</h3>
+        <p>Network gateway, with a cellular modem. The only network stack.</p>
+        <ul>
+          <li>Fetches RTK corrections and passes them on</li>
+          <li>Hosts the status page</li>
+          <li>Takes settings and other user commands, and passes them on</li>
+          <li>Later, firmware for every device arrives here first</li>
+        </ul>
+      </article>
+      <article class="role mcu">
+        <h3>Teensy 4.1</h3>
+        <p>Realtime MCU on this build. The chip may change. The job does not.</p>
+        <ul>
+          <li>Passes corrections to the GNSS module and reads the fix back</li>
+          <li>Sends every sensor reading to the CCU</li>
+          <li>Forwards the CCU pose and its uncertainty to the status page</li>
+          <li>Drives the wheels at the speeds navigation commands</li>
+        </ul>
+      </article>
+      <article class="role sbc">
+        <h3>CCU</h3>
+        <p>The external computer. Its program is out of scope. This is the overview.</p>
+        <ul>
+          <li>Takes every Teensy reading, plus the cameras on the robot</li>
+          <li>Outputs a 5DOF pose: east, north, heading, roll, pitch. No height. That may be reversed.</li>
+          <li>Reports an uncertainty taken directly from the fusion</li>
+          <li>Navigation turns that pose into wheel-speed commands</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section id="rtk" aria-labelledby="rtk-title">
+    <h2 id="rtk-title"><span class="sec-num">2</span> Where the RTK fix is computed</h2>
+    <p class="intro">On the LG290P, the green box. The ESP32 and the Teensy only carry the corrections in and the fix out.</p>
+    <figure>
+      <svg class="rtk-svg" viewBox="0 0 1080 250" role="img" aria-labelledby="rtkSvgTitle rtkSvgDesc">
+        <title id="rtkSvgTitle">Where the RTK calculation is done</title>
+        <desc id="rtkSvgDesc">Corrections travel from the internet through the ESP32 and the Teensy into the LG290P. The LG290P computes the RTK fix. The ESP32 and the Teensy pass the corrections through and read the finished fix back.</desc>
+        <defs>
+          <marker id="arrNet" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="#1d4ed8"/></marker>
+          <marker id="arrGw" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="#0f766e"/></marker>
+          <marker id="arrMcu" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="#c2410c"/></marker>
+        </defs>
+        <g font-family="Segoe UI, system-ui, sans-serif">
+          <rect x="4" y="46" width="188" height="168" rx="16" fill="#1d4ed8"/>
+          <text x="98" y="92" text-anchor="middle" fill="#dbeafe" font-size="14">Source of corrections</text>
+          <text x="98" y="122" text-anchor="middle" fill="#ffffff" font-size="20" font-weight="700">Internet</text>
+          <text x="98" y="148" text-anchor="middle" fill="#dbeafe" font-size="15">Base station</text>
+
+          <line x1="200" y1="130" x2="268" y2="130" stroke="#1d4ed8" stroke-width="3" marker-end="url(#arrNet)"/>
+          <text x="234" y="112" text-anchor="middle" fill="#1d4ed8" font-size="12" font-weight="650">Cellular</text>
+          <text x="234" y="156" text-anchor="middle" fill="#1d4ed8" font-size="12">Corrections</text>
+
+          <rect x="276" y="46" width="188" height="168" rx="16" fill="#0f766e"/>
+          <text x="370" y="92" text-anchor="middle" fill="#ccfbf1" font-size="14">Transport</text>
+          <text x="370" y="122" text-anchor="middle" fill="#ffffff" font-size="20" font-weight="700">ESP32</text>
+          <text x="370" y="158" text-anchor="middle" fill="#ccfbf1" font-size="14">Forwards corrections</text>
+
+          <line x1="472" y1="130" x2="540" y2="130" stroke="#0f766e" stroke-width="3" marker-end="url(#arrGw)"/>
+          <text x="506" y="112" text-anchor="middle" fill="#0f766e" font-size="12" font-weight="650">Gateway</text>
+          <text x="506" y="156" text-anchor="middle" fill="#0f766e" font-size="12">Corrections</text>
+
+          <rect x="548" y="46" width="200" height="168" rx="16" fill="#c2410c"/>
+          <text x="648" y="92" text-anchor="middle" fill="#ffedd5" font-size="14">Transport</text>
+          <text x="648" y="122" text-anchor="middle" fill="#ffffff" font-size="20" font-weight="700">Teensy 4.1</text>
+          <text x="648" y="158" text-anchor="middle" fill="#ffedd5" font-size="14">Relays corrections</text>
+
+          <line x1="756" y1="130" x2="824" y2="130" stroke="#c2410c" stroke-width="3" marker-end="url(#arrMcu)"/>
+          <text x="790" y="112" text-anchor="middle" fill="#c2410c" font-size="12" font-weight="650">To the module</text>
+          <text x="790" y="156" text-anchor="middle" fill="#c2410c" font-size="12">Fix comes back</text>
+
+          <rect x="832" y="40" width="242" height="180" rx="16" fill="#15803d" stroke="#facc15" stroke-width="5"/>
+          <text x="953" y="88" text-anchor="middle" fill="#fef9c3" font-size="14" font-weight="700">Calculation</text>
+          <text x="953" y="120" text-anchor="middle" fill="#ffffff" font-size="22" font-weight="700">LG290P</text>
+          <text x="953" y="150" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="700">RTK fix is</text>
+          <text x="953" y="172" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="700">computed here</text>
+        </g>
+      </svg>
+      <figcaption>When the base-station service asks for the rover position, it receives this fix. The CCU later fuses it with the other readings. That fusion is not a second RTK calculation.</figcaption>
+    </figure>
+  </section>
+
+  <section id="system" aria-labelledby="system-title">
+    <h2 id="system-title"><span class="sec-num">3</span> How the rover is connected</h2>
+    <p class="intro">The CCU sits beside the Teensy, on its own link. The cameras go to the CCU. They do not pass through the Teensy.</p>
+    <figure>
+      <div class="stack">
+        <div class="node net">
+          <p class="who">Network</p>
+          <h3>Internet</h3>
+          <p>Base-station corrections.</p>
+        </div>
+        <div class="hop down cell">
+          <span>Cellular</span>
+          <span class="shaft"></span>
+        </div>
+        <div class="node gw">
+          <p class="who">Network gateway</p>
+          <h3>ESP32-WROOM</h3>
+          <p>Passes on corrections and user commands. Hosts the status page.</p>
+        </div>
+        <div class="hop down">
+          <span>Gateway link<br>corrections and commands down<br>status up</span>
+          <span class="shaft"></span>
+        </div>
+      </div>
+      <div class="split">
+        <div class="node mcu">
+          <p class="who">Realtime MCU · this build</p>
+          <h3>Teensy 4.1</h3>
+          <p>Sensors, corrections, and the two drive wheels.</p>
+        </div>
+        <div class="hop across drive">
+          <span>Driving link<br>pose and wheel speeds down<br>sensor readings up</span>
+          <span class="shaft"></span>
+        </div>
+        <div class="node sbc">
+          <p class="who">Not this firmware</p>
+          <h3>CCU</h3>
+          <p>Fuses Teensy readings and the cameras into the 5DOF pose. Navigation commands the wheels.</p>
+        </div>
+      </div>
+      <p class="banner">The side link is the driving link. The ESP32 is not on it.</p>
+      <div class="owns">
+        <article class="own rtk">
+          <h3>LG290P</h3>
+          <p>Computes the RTK fix.</p>
+        </article>
+        <article class="own sensor">
+          <h3>BNO055</h3>
+          <p>IMU reading, sent to the CCU.</p>
+        </article>
+        <article class="own sensor">
+          <h3>Hall encoders</h3>
+          <p>Wheel speed, both sides.</p>
+        </article>
+        <article class="own motor">
+          <h3>DRI0041 and motors</h3>
+          <p>The two drive motors.</p>
+        </article>
+      </div>
+      <figcaption>The four cards belong to the Teensy. It sends them to the CCU as readings. The CCU computes the pose.</figcaption>
+    </figure>
+  </section>
+
+  <section id="links" aria-labelledby="links-title">
+    <h2 id="links-title"><span class="sec-num">4</span> What moves on each link</h2>
+    <p class="intro">Two links, and they stay separate. Replacing the Teensy does not move these jobs. Wheel commands never pass through the ESP32.</p>
+    <div class="pair">
+      <article class="track gw">
+        <div class="ends">
+          <span class="chip" style="background:var(--gw)">ESP32</span>
+          <span class="chip" style="background:var(--mcu)">Teensy</span>
+        </div>
+        <h3>Gateway link</h3>
+        <ol>
+          <li>Corrections and user settings go down.</li>
+          <li>The Teensy passes corrections to the LG290P. The module computes the fix.</li>
+          <li>The CCU pose, its uncertainty, and GNSS health come up for the status page.</li>
+        </ol>
+      </article>
+      <article class="track sbc">
+        <div class="ends">
+          <span class="chip" style="background:var(--sbc)">CCU</span>
+          <span class="chip" style="background:var(--mcu)">Teensy</span>
+        </div>
+        <h3>Driving link</h3>
+        <ol>
+          <li>Every sensor reading goes up to the CCU.</li>
+          <li>The pose and its uncertainty come back down.</li>
+          <li>Wheel-speed commands from navigation come down.</li>
+        </ol>
+      </article>
+    </div>
+  </section>
+
+  <section id="status" aria-labelledby="status-title">
+    <h2 id="status-title"><span class="sec-num">5</span> What the status page shows</h2>
+    <p class="intro">The ESP32 hosts the page. The pose on it is the CCU’s estimate. The page does not compute one.</p>
+    <div class="sheet">
+      <div class="sheet-head">
+        <h3>ESP32 status page</h3>
+        <p>5DOF, no height. Leaving height out may be reversed. Uncertainty comes straight from the fusion.</p>
+      </div>
+      <div class="sheet-body">
+        <p class="src">Pose, from the CCU</p>
+        <div class="fields pose">
+          <div class="field att"><span>Position</span><strong>East, north</strong></div>
+          <div class="field att"><span>Yaw</span><strong>Heading</strong></div>
+          <div class="field att"><span>Attitude</span><strong>Roll</strong></div>
+          <div class="field att"><span>Attitude</span><strong>Pitch</strong></div>
+          <div class="field att"><span>From the fusion</span><strong>Uncertainty</strong></div>
+        </div>
+        <p class="src">GNSS health, from the LG290P. This is not the pose.</p>
+        <div class="fields">
+          <div class="field"><span>Count</span><strong>Satellites visible</strong></div>
+          <div class="field"><span>Fix state</span><strong>RTK status</strong></div>
+          <div class="field"><span>Metric not chosen</span><strong>Signal strength</strong></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="versions" aria-labelledby="ver-title">
+    <h2 id="ver-title"><span class="sec-num">6</span> This build, and the later product</h2>
+    <p class="intro">The product updates every device through the ESP32. This build updates the ESP32 only.</p>
+    <div class="versions">
+      <article class="ver now">
+        <h3>Now</h3>
+        <ul>
+          <li>The ESP32 updates its own application over the internet.</li>
+          <li>The Teensy is updated on the bench.</li>
+          <li>The LG290P is updated by hand.</li>
+        </ul>
+      </article>
+      <article class="ver later">
+        <h3>Later</h3>
+        <ul>
+          <li>Every device is updated through the ESP32’s internet connection.</li>
+          <li>The Teensy may be replaced. The replacement is an open choice.</li>
+          <li>The two links stay as they are.</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section id="out" aria-labelledby="out-title">
+    <h2 id="out-title">Not covered here</h2>
+    <ul class="out">
+      <li>The CCU program and the navigation engine, beyond the overview above</li>
+      <li>The status-page layout, and how a browser opens it</li>
+      <li>The signal-strength metric</li>
+      <li>Which chip replaces the Teensy, if one is required</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
